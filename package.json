@@ -4,12 +4,23 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "cli": "ts-node cli.ts"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/node-fetch": "^2.6.11",
+    "@types/yargs": "^17.0.32",
     "axios": "^1.6.7",
+    "csv-parse": "^5.5.5",
+    "csv-stringify": "^6.4.6",
+    "decision-tree": "^0.3.7",
+    "ml-cart": "^2.1.1",
+    "node-fetch": "^2.6.7",
     "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.2"
   }
 }
