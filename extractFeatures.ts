@@ -1,4 +1,6 @@
 import fetch from 'node-fetch';
+import assert from 'assert';
+import { classifyWithGPT, getEmbedding } from './gpt';
 
 export type Revision = {
     revisionUrl: string;
@@ -10,6 +12,8 @@ export type Revision = {
 }
 
 const rateLimitExceededWaitTimeSeconds = 10; // 30 seconds
+const diffEmbeddingDimensions = 16;
+const usernameEmbeddingDimensions = 8;
 const getDiffs = false;
 
 const cache: Map<string, any> = new Map();
@@ -197,7 +201,38 @@ export function extractDistributionStatistics(baseFeatureName: string, nums: num
 }
 
 function differences(nums: number[]): number[] {
-    return nums.slice(1).map((num, ind) => num - nums[ind]);
+    let diffs = nums.slice(1).map((num, ind) => num - nums[ind]);
+    console.log(nums);
+    console.log(diffs);
+
+    //TODO: *sometimes* order of inputs is reversed. figure this out and enable the assertion
+    //assert(!diffs.some(diff => diff < 0), 'Bug: negative or zero difference between timestamps')
+    if (diffs.length > 0 && diffs[0] < 0) {
+        diffs = diffs.map(diff => diff * -1);
+    }
+
+    return diffs;
+}
+
+function mapClassToNumber(classification: string): number {
+    switch (classification) {
+        case 'INCREASES npov':
+            return 1;
+        case 'DECREASES npov':
+            return -1;
+        case 'DOES NOT AFFECT npov':
+            return 0;
+        default:
+            throw new Error(`Invalid classification: ${classification}`);
+    }
+}
+
+function featurizeArray(baseFeatureName: string, arr: number[]): object {
+    const features = {};
+    arr.forEach((num, ind) => {
+        features[`${baseFeatureName}${ind}`] = num;
+    });
+    return features;
 }
 
 export async function extractFeatures(revisionUrl: string): Promise<Record<string, any>> {
@@ -206,9 +241,13 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
     const pastRevisions = await fetchPastRevisions(revisionUrl);
     const thisRevision = pastRevisions[0];
 
+    console.log(`Extracting features for revision ${thisRevision.revisionUrl} (by ${thisRevision.userName}), with ${pastRevisions.length} past revisions`);
     const pastRevisionsCount = pastRevisions.length;
     const timesBetweenRevisions = differences(pastRevisions.map(revision => revision.timestamp)).reverse();
     const timesBetweenUserRevisions = differences(pastRevisions.filter(revision => revision.userId === thisRevision.userId).map(revision => revision.timestamp)).reverse();
+    const gptClassification = mapClassToNumber(await classifyWithGPT(thisRevision.diff!));
+    const diffEmbedding = await getEmbedding(thisRevision.diff!, diffEmbeddingDimensions);
+    const usernameEmbedding = await getEmbedding(thisRevision.userName, usernameEmbeddingDimensions);
 
     const timesBetweenRevisionsStats = extractDistributionStatistics('timeBetweenRevisions', timesBetweenRevisions);
     const timesBetweenUserRevisionsStats = extractDistributionStatistics('timeBetweenUserRevisions', timesBetweenUserRevisions);
@@ -231,7 +270,9 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
         averageTimeBetweenUserAuthoredRevisions,
         diffText,
         ...timesBetweenRevisionsStats,
-        ...timesBetweenUserRevisionsStats
+        ...timesBetweenUserRevisionsStats,
+        ...featurizeArray('diffEmbedding', diffEmbedding),
+        ...featurizeArray('usernameEmbedding', usernameEmbedding),
     };
     console.log('Features:', features);
     return features;

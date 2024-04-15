@@ -7,6 +7,8 @@ import { parse } from 'csv-parse';
 import { stringify } from 'csv-stringify';
 import { readFile, writeFile } from 'fs/promises';
 import { train, evaluate } from './train';
+import { classifyWithGPT } from './gpt';
+import { sleep } from 'openai/core';
 
 interface Revision {
     revisionUrl: string;
@@ -18,6 +20,22 @@ interface ArticleMetadata {
     title: string;
     url: string;
     length: number;
+}
+
+async function doInBatches<T, R>(
+    fn: (t: T) => Promise<R>,
+    maxBatchSize: number,
+    ts: T[]
+): Promise<R[]> {
+    let result: R[] = [];
+    for (let i = 0; i < ts.length; i += maxBatchSize) {
+        console.log(`Processing batch ${i / maxBatchSize + 1}...`)
+        const batch = ts.slice(i, i + maxBatchSize);
+        const promises = batch.map(t => fn(t));
+        result = result.concat(await Promise.all(promises));
+        console.log(`==> Progress: ${((i + 1) / ts.length) * 100}%`);
+    }
+    return result;
 }
 
 const fetchRevisions = async (articleUrl: string): Promise<Revision[]> => {
@@ -162,11 +180,11 @@ const argv = yargs(hideBin(process.argv))
 
         const features = new Map();
         let ind = 0;
-        for (const revision of revisions) {
-            features.set(revision, await extractFeatures(revision));
-            ind += 1;
-            console.log(`=> ${ind / revisions.length * 100}% complete`);
-        }
+        await doInBatches(extractFeatures, 5, revisions).then((results) => {
+            results.forEach((featureSet) => {
+                features.set(revisions[ind++], featureSet);
+            });
+        });
 
         const featureNames = Object.keys(features.get(revisions[0]));
 
@@ -235,14 +253,131 @@ const argv = yargs(hideBin(process.argv))
 
         console.log(`Training model...`);
         const dt = await train(trainFeatures, trainLabels);
-        const train_accuracy = await evaluate(dt, trainFeatures, trainLabels);
-        const test_accuracy = await evaluate(dt, testFeatures, testLabels);
+        const train_stats = await evaluate(dt, trainFeatures, trainLabels);
+        const test_stats = await evaluate(dt, testFeatures, testLabels);
         console.log('='.repeat(20));
-        console.log(`Train accuracy: ${train_accuracy}`);
-        console.log(`Test accuracy: ${test_accuracy}`);
+
+        console.log('Training set statistics:');
+        console.log(train_stats);
+
+        console.log('='.repeat(20));
+
+        console.log('Test set statistics:');
+        console.log(test_stats);
 
         const model = dt.toJSON();
         await writeFile(argv.output, JSON.stringify(model));
+    })
+    .command('compare-to-gpt', 'Compare a set of labels to GPT-4 labels', (yargs) => {
+        return yargs
+            .option('labels', {
+                alias: 'l',
+                describe: 'Path to the labels CSV file',
+                default: 'data/labels.csv'
+            })
+            .option('features', {
+                alias: 'f',
+                describe: 'Path to the features CSV file',
+                default: 'data/features.csv'
+            })
+            .option('output', {
+                alias: 'o',
+                describe: 'Path to the output CSV file',
+                default: 'data/labels_gpt_comparison.csv'
+            })
+            .option('noFailOnMissingDiffText', {
+                describe: 'Whether to fail if diff text is missing for a revision',
+                default: true,
+                type: 'boolean'
+            });
+    }, async (argv) => {
+        const labelsContent = await readFile(argv.labels, 'utf8');
+        const featuresContent = await readFile(argv.features, 'utf8');
+
+        const labelsRecords = parse(labelsContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const featuresRecords = parse(featuresContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const revisionUrlToDiffText = new Map<string, string>();
+        for (const record of await featuresRecords.toArray()) {
+            revisionUrlToDiffText.set(record.revisionUrl, record.diffText);
+        }
+
+        const trueLabels: string[] = [];
+        const revisionUrls: string[] = [];
+        const diffs: string[] = [];
+        for (const record of await labelsRecords.toArray()) {
+            if (!revisionUrlToDiffText.has(record.revisionUrl)) {
+                if (!argv.noFailOnMissingDiffText) {
+                    throw new Error(`Couldn't find diff text for ${record.revisionUrl}`);
+                } else {
+                    continue;
+                }
+            }
+
+            trueLabels.push(record.label);
+            revisionUrls.push(record.revisionUrl);
+            diffs.push(revisionUrlToDiffText.get(record.revisionUrl)!);
+        };
+
+        console.log(revisionUrls.length, trueLabels.length, diffs.length)
+        console.log(`Comparing ${diffs.length} labels to GPT-4...`)
+        const gptLabels = await doInBatches(classifyWithGPT, 5, diffs);
+
+        const csvData: string[][] = [
+            ['revisionUrl', 'trueLabel', 'gptLabel']
+        ];
+
+        for (let i = 0; i < trueLabels.length; i++) {
+            csvData.push([revisionUrls[i], trueLabels[i], gptLabels[i]]);
+        }
+
+        const total = trueLabels.length;
+        let npovIncreasing = 0, npovDecreasing = 0, npovNeutral = 0;
+        let totalLabelMatches = 0, npovIncreasingLabelMatches = 0, npovDecreasingLabelMatches = 0, npovNeutralLabelMatches = 0;
+        for (let i = 0; i < total; i++) {
+            if (trueLabels[i] === gptLabels[i]) {
+                totalLabelMatches += 1;
+                if (trueLabels[i] === 'INCREASES npov') {
+                    npovIncreasingLabelMatches += 1;
+                } else if (trueLabels[i] === 'DECREASES npov') {
+                    npovDecreasingLabelMatches += 1;
+                } else if (trueLabels[i] === 'DOES NOT AFFECT npov') {
+                    npovNeutralLabelMatches += 1;
+                }
+            }
+            if (trueLabels[i] === 'INCREASES npov') {
+                npovIncreasing += 1;
+            }
+            if (trueLabels[i] === 'DECREASES npov') {
+                npovDecreasing += 1;
+            }
+            if (trueLabels[i] === 'DOES NOT AFFECT npov') {
+                npovNeutral += 1;
+            }
+        }
+
+        const totalAccuracy = totalLabelMatches / total;
+        const npovIncreasingAccuracy = npovIncreasingLabelMatches / npovIncreasing
+        const npovDecreasingAccuracy = npovDecreasingLabelMatches / npovDecreasing;
+        const npovNeutralAccuracy = npovNeutralLabelMatches / npovNeutral;
+
+        console.log('='.repeat(20));
+        console.log('Comparison statistics:');
+        console.log('='.repeat(20));
+        console.log(`Total accuracy: ${totalAccuracy * 100}%`);
+        console.log(`NPOV increasing accuracy: ${npovIncreasingAccuracy * 100}%`);
+        console.log(`NPOV decreasing accuracy: ${npovDecreasingAccuracy * 100}%`);
+        console.log(`NPOV neutral accuracy: ${npovNeutralAccuracy * 100}%`);
+
+        console.log(`Writing comparison to ${argv.output}...`);
+        await writeFile(argv.output, stringify(csvData));
     })
     .demandCommand(1, 'You need at least one command before moving on')
     .help().argv;

@@ -17,6 +17,7 @@
     "decision-tree": "^0.3.7",
     "ml-cart": "^2.1.1",
     "node-fetch": "^2.6.7",
+    "openai": "^4.33.0",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
