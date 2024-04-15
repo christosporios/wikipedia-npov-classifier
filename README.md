@@ -30,5 +30,5 @@ To train a model:
 4. Optionally, you can compare your labels to GPT-4 with `compare-to-gpt`.
 5. Train the model: `train`
 
-## Author
+## Authors
 Louis Guerin and Christos Porios
