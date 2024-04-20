@@ -22,6 +22,18 @@ interface ArticleMetadata {
     length: number;
 }
 
+function numberCategory(n: number) {
+    if (n > 0) {
+        return 'positive';
+    } else if (n < 0) {
+        return 'negative';
+    } else {
+        return 'neutral';
+    }
+}
+
+let cat = numberCategory(5);
+
 async function doInBatches<T, R>(
     fn: (t: T) => Promise<R>,
     maxBatchSize: number,
@@ -31,7 +43,14 @@ async function doInBatches<T, R>(
     for (let i = 0; i < ts.length; i += maxBatchSize) {
         console.log(`Processing batch ${i / maxBatchSize + 1}...`)
         const batch = ts.slice(i, i + maxBatchSize);
-        const promises = batch.map(t => fn(t));
+        const promises = batch.map(t => {
+            return fn(t)
+                .then(result => result)
+                .catch(e => {
+                    console.error(`Failed to process ${t}: ${e}`);
+                    return null;
+                });
+        });
         result = result.concat(await Promise.all(promises));
         console.log(`==> Progress: ${((i + 1) / ts.length) * 100}%`);
     }
@@ -164,7 +183,12 @@ const argv = yargs(hideBin(process.argv))
                 alias: 'o',
                 describe: 'Path to the output CSV file',
                 default: 'data/features.csv'
-            });
+            })
+            .option('only', {
+                alias: 'n',
+                describe: 'Number of revisions to extract features from',
+                type: 'number'
+            })
 
     }, async (argv) => {
         const inputFileContent = await readFile(argv.input, 'utf8');
@@ -175,16 +199,27 @@ const argv = yargs(hideBin(process.argv))
         });
 
         const revisions = await records.map(record => record.revisionUrl).filter(url => url).toArray();
+        if (argv.only) {
+            revisions.splice(argv.only);
+        }
 
         console.log(`Extracting features from ${revisions.length} revisions...`);
 
         const features = new Map();
         let ind = 0;
+        let failures = 0;
         await doInBatches(extractFeatures, 5, revisions).then((results) => {
             results.forEach((featureSet) => {
+                if (featureSet === null) {
+                    console.log("Skipping failed feature extraction instance...");
+                    failures++;
+                    return;
+                }
                 features.set(revisions[ind++], featureSet);
             });
         });
+
+        console.log(`Extracted features from ${revisions.length - failures} revisions,  ${failures} failed.`);
 
         const featureNames = Object.keys(features.get(revisions[0]));
 
@@ -381,3 +416,4 @@ const argv = yargs(hideBin(process.argv))
     })
     .demandCommand(1, 'You need at least one command before moving on')
     .help().argv;
+

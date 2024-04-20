@@ -196,20 +196,13 @@ export function extractDistributionStatistics(baseFeatureName: string, nums: num
         [`${baseFeatureName}Q3`]: q3,
         [`${baseFeatureName}StdDev`]: stdDev
     };
-    console.log(`Distribution statistics for ${baseFeatureName}:`, stats);
     return stats;
 }
 
 function differences(nums: number[]): number[] {
     let diffs = nums.slice(1).map((num, ind) => num - nums[ind]);
-    console.log(nums);
-    console.log(diffs);
 
-    //TODO: *sometimes* order of inputs is reversed. figure this out and enable the assertion
-    //assert(!diffs.some(diff => diff < 0), 'Bug: negative or zero difference between timestamps')
-    if (diffs.length > 0 && diffs[0] < 0) {
-        diffs = diffs.map(diff => diff * -1);
-    }
+    assert(!diffs.some(diff => diff < 0), 'Bug: negative difference between timestamps')
 
     return diffs;
 }
@@ -240,6 +233,8 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
 
     const pastRevisions = await fetchPastRevisions(revisionUrl);
     const thisRevision = pastRevisions[0];
+    // order past revisions by timestamp
+    pastRevisions.sort((a, b) => a.timestamp - b.timestamp);
 
     console.log(`Extracting features for revision ${thisRevision.revisionUrl} (by ${thisRevision.userName}), with ${pastRevisions.length} past revisions`);
     const pastRevisionsCount = pastRevisions.length;
@@ -248,6 +243,7 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
     const gptClassification = mapClassToNumber(await classifyWithGPT(thisRevision.diff!));
     const diffEmbedding = await getEmbedding(thisRevision.diff!, diffEmbeddingDimensions);
     const usernameEmbedding = await getEmbedding(thisRevision.userName, usernameEmbeddingDimensions);
+    const isUsernameIp = thisRevision.userName.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) ? 1 : 0;
     const timesBetweenRevisionsStats = extractDistributionStatistics('timeBetweenRevisions', timesBetweenRevisions);
     const timesBetweenUserRevisionsStats = extractDistributionStatistics('timeBetweenUserRevisions', timesBetweenUserRevisions);
 
@@ -260,6 +256,7 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
 
     const features = {
         authorUserName: thisRevision.userName,
+        isUsernameIp,
         pastRevisionsCount,
         averageTimeBetweenRevisions,
         pastRevisionsAuthoredByUser,
