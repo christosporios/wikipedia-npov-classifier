@@ -248,10 +248,8 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
     const gptClassification = mapClassToNumber(await classifyWithGPT(thisRevision.diff!));
     const diffEmbedding = await getEmbedding(thisRevision.diff!, diffEmbeddingDimensions);
     const usernameEmbedding = await getEmbedding(thisRevision.userName, usernameEmbeddingDimensions);
-
     const timesBetweenRevisionsStats = extractDistributionStatistics('timeBetweenRevisions', timesBetweenRevisions);
     const timesBetweenUserRevisionsStats = extractDistributionStatistics('timeBetweenUserRevisions', timesBetweenUserRevisions);
-
 
     const averageTimeBetweenRevisions = calculateAverageTimeBetweenRevisions(pastRevisions);
     const pastRevisionsAuthoredByUser = pastRevisions.filter(revision => revision.userId === thisRevision.userId).length;
@@ -269,6 +267,7 @@ export async function extractFeatures(revisionUrl: string): Promise<Record<strin
         percPastRevisionsAuthored,
         averageTimeBetweenUserAuthoredRevisions,
         diffText,
+        gptClassification,
         ...timesBetweenRevisionsStats,
         ...timesBetweenUserRevisionsStats,
         ...featurizeArray('diffEmbedding', diffEmbedding),
