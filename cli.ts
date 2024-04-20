@@ -229,7 +229,12 @@ const argv = yargs(hideBin(process.argv))
         for (const revision of revisions) {
             const rowData = [revision];
             for (const featureName of featureNames) {
-                rowData.push(features.get(revision)[featureName] || '');
+                let f = features.get(revision)
+                if (f && f[featureName]) {
+                    rowData.push([featureName] || '');
+                } else {
+                    rowData.push('');
+                }
             }
             csvData.push(rowData);
         }
