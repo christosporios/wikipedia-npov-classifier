@@ -231,7 +231,7 @@ const argv = yargs(hideBin(process.argv))
             for (const featureName of featureNames) {
                 let f = features.get(revision)
                 if (f && f[featureName]) {
-                    rowData.push([featureName] || '');
+                    rowData.push(f[featureName] || '');
                 } else {
                     rowData.push('');
                 }
@@ -307,6 +307,63 @@ const argv = yargs(hideBin(process.argv))
 
         const model = dt.toJSON();
         await writeFile(argv.output, JSON.stringify(model));
+    })
+    .command('join-labels-and-features', 'Join labels and features CSV files', (yargs) => {
+        return yargs
+            .option('features', {
+                alias: 'f',
+                describe: 'Path to the features CSV file',
+                default: 'data/features.csv'
+            })
+            .option('labels', {
+                alias: 'l',
+                describe: 'Path to the labels CSV file',
+                default: 'data/labels.csv'
+            })
+            .option('output', {
+                alias: 'o',
+                describe: 'Path to the output CSV file',
+                default: 'data/features_and_labels.csv'
+            });
+    }, async (argv) => {
+        const featuresContent = await readFile(argv.features, 'utf8');
+        const labelsContent = await readFile(argv.labels, 'utf8');
+
+        const featuresRecords = parse(featuresContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const labelsRecords = parse(labelsContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const features = await featuresRecords.toArray();
+        const labels = await labelsRecords.toArray();
+
+        // Join the features and labels
+        const featureNames = Object.keys(features[0]).filter(name => name !== 'revisionUrl')
+        const csvHeader = ['revisionUrl', 'label', ...featureNames];
+        const csvData = [csvHeader];
+
+        for (let i = 0; i < features.length; i++) {
+            const revision = [features[i].revisionUrl, labels[i].label];
+            const f = features.find(f => f.revisionUrl === labels[i].revisionUrl);
+
+            if (!f) {
+                console.error(`Couldn't find features for ${labels[i].revisionUrl}`);
+                continue;
+            }
+
+            for (let j = 0; j < featureNames.length; j++) {
+                revision.push(f[featureNames[j]]);
+            }
+
+            csvData.push(revision);
+        }
+
+        await writeFile(argv.output, stringify(csvData));
     })
     .command('compare-to-gpt', 'Compare a set of labels to GPT-4 labels', (yargs) => {
         return yargs
